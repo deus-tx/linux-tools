@@ -191,17 +191,34 @@ ALGORITHM=lz4
 PERCENT=50
 EOF
 
-sudo systemctl start dbus.service
+# Script already runs as root, so sudo is unnecessary.
+systemctl start dbus.service
 
-sudo systemctl enable zram-tools 2>/dev/null || true
-sudo systemctl restart zram-tools || true
-
+systemctl enable zram-tools 2>/dev/null || true
+systemctl restart zram-tools || true
 
 # Automatic Login
 echo
 echo "=== 5. Automatic Login Configuration ==="
 echo
 read -r -p "Enable automatic login on TTY1? (y/n): " ENABLE_AUTOLOGIN
+
+# One-shot autologin:
+# - First login after boot is automatic.
+# - After Openbox exits, getty returns to normal login.
+# - Reboot clears /run, allowing automatic login again.
+
+ONE_SHOT_GETTY="/usr/local/sbin/one-shot-autologin"
+AUTOLOGIN_DROPIN_DIR="/etc/systemd/system/getty@tty1.service.d"
+AUTOLOGIN_DROPIN="$AUTOLOGIN_DROPIN_DIR/autologin.conf"
+AUTOLOGIN_FLAG="/run/openbox-autologin-used"
+
+# Always clean up previous configuration first.
+rm -f -- "$AUTOLOGIN_DROPIN"
+rm -f -- "$ONE_SHOT_GETTY"
+rm -rf -- "$AUTOLOGIN_FLAG"
+
+systemctl daemon-reload
 
 if [[ "$ENABLE_AUTOLOGIN" =~ ^[Yy]$ ]]; then
 
@@ -237,34 +254,97 @@ if [[ "$ENABLE_AUTOLOGIN" =~ ^[Yy]$ ]]; then
 
         if [ -n "$AUTOLOGIN_USER" ]; then
             echo
-            echo "Configuring automatic login for: $AUTOLOGIN_USER"
+            echo "Configuring one-shot automatic login for: $AUTOLOGIN_USER"
 
-            mkdir -p /etc/systemd/system/getty@tty1.service.d
+            # Create the one-shot agetty wrapper.
+            #
+            # First start after boot:
+            #   -> automatic login
+            #
+            # Every later getty restart:
+            #   -> normal login prompt
+            #
+            # /run is cleared during reboot, so automatic login
+            # becomes available again on the next boot.
 
-            cat > /etc/systemd/system/getty@tty1.service.d/autologin.conf << EOF
-[Service]
-ExecStart=
-ExecStart=-/sbin/agetty --autologin $AUTOLOGIN_USER --noclear %I \$TERM
+            cat > "$ONE_SHOT_GETTY" << 'EOF'
+#!/bin/bash
+
+set -e
+
+AUTOLOGIN_USER="$1"
+shift
+
+FLAG="/run/openbox-autologin-used"
+
+# mkdir is atomic:
+# only the first getty invocation can successfully create the directory.
+if mkdir "$FLAG" 2>/dev/null; then
+    exec /sbin/agetty --autologin "$AUTOLOGIN_USER" "$@"
+else
+    exec /sbin/agetty "$@"
+fi
 EOF
 
+            chmod 755 "$ONE_SHOT_GETTY"
+            chown root:root "$ONE_SHOT_GETTY"
+
+            mkdir -p "$AUTOLOGIN_DROPIN_DIR"
+
+            cat > "$AUTOLOGIN_DROPIN" << EOF
+[Service]
+ExecStart=
+ExecStart=-$ONE_SHOT_GETTY $AUTOLOGIN_USER --noclear %I \$TERM
+EOF
+
+            # Make sure the first boot after installation gets autologin.
+            rm -rf -- "$AUTOLOGIN_FLAG"
+
             systemctl daemon-reload
+
+            # Ensure tty1 getty is enabled.
             systemctl enable getty@tty1.service
 
             echo
-            echo "✓ Automatic login enabled for $AUTOLOGIN_USER"
+            echo "✓ One-shot automatic login enabled for $AUTOLOGIN_USER"
+            echo
+            echo "Behavior:"
+            echo "  Boot"
+            echo "    -> automatic login"
+            echo "    -> Openbox"
+            echo
+            echo "  Openbox -> Exit"
+            echo "    -> normal login prompt"
+            echo
+            echo "  Login again"
+            echo "    -> Openbox"
+            echo
+            echo "  Reboot"
+            echo "    -> automatic login again"
+
+        else
+            echo
+            echo "Automatic login cancelled."
+            echo "Normal login will be used."
+
+            systemctl daemon-reload
         fi
 
     else
         echo
         echo "Invalid selection."
         echo "Automatic login was not configured."
+
+        systemctl daemon-reload
     fi
 
 else
     echo
     echo "Automatic login disabled."
-fi
 
+    # Previous configuration was already removed above.
+    systemctl daemon-reload
+fi
 
 # Finished
 echo
