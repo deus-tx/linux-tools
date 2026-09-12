@@ -187,13 +187,12 @@ fi
 echo
 echo "=== 4. Configuring ZRAM ==="
 
+systemctl start dbus.service
+
 cat > /etc/default/zram-tools << 'EOF'
 ALGORITHM=lz4
 PERCENT=50
 EOF
-
-# Script already runs as root, so sudo is unnecessary.
-systemctl start dbus.service
 
 systemctl enable zram-tools 2>/dev/null || true
 systemctl restart zram-tools || true
