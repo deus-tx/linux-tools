@@ -100,13 +100,10 @@ apt install -y --no-install-recommends \
     xorg \
     openbox \
     xterm \
-    vlc \
-    gparted \
     synaptic \
     zram-tools \
     curl \
-    ca-certificates \
-    sudo
+    ca-certificates
 
 # Configure users
 echo
@@ -194,8 +191,80 @@ ALGORITHM=lz4
 PERCENT=50
 EOF
 
-systemctl enable zram-tools 2>/dev/null || true
-systemctl restart zram-tools || true
+sudo systemctl start dbus.service
+
+sudo systemctl enable zram-tools 2>/dev/null || true
+sudo systemctl restart zram-tools || true
+
+
+# Automatic Login
+echo
+echo "=== 5. Automatic Login Configuration ==="
+echo
+read -r -p "Enable automatic login on TTY1? (y/n): " ENABLE_AUTOLOGIN
+
+if [[ "$ENABLE_AUTOLOGIN" =~ ^[Yy]$ ]]; then
+
+    echo
+    echo "Users available for automatic login:"
+    echo
+
+    i=1
+    for username in "${TARGET_USERS[@]}"; do
+        echo "  $i) $username"
+        ((i++))
+    done
+
+    echo
+    read -r -p "Select user number for automatic login: " AUTOLOGIN_CHOICE
+
+    if [[ "$AUTOLOGIN_CHOICE" =~ ^[0-9]+$ ]] \
+        && [ "$AUTOLOGIN_CHOICE" -ge 1 ] \
+        && [ "$AUTOLOGIN_CHOICE" -le "${#TARGET_USERS[@]}" ]; then
+
+        AUTOLOGIN_USER="${TARGET_USERS[$((AUTOLOGIN_CHOICE - 1))]}"
+
+        if [ "$AUTOLOGIN_USER" = "root" ]; then
+            echo
+            echo "WARNING: Automatic root login is not recommended."
+            read -r -p "Are you REALLY sure? (y/n): " ROOT_CONFIRM
+
+            if [[ ! "$ROOT_CONFIRM" =~ ^[Yy]$ ]]; then
+                echo "Automatic root login cancelled."
+                AUTOLOGIN_USER=""
+            fi
+        fi
+
+        if [ -n "$AUTOLOGIN_USER" ]; then
+            echo
+            echo "Configuring automatic login for: $AUTOLOGIN_USER"
+
+            mkdir -p /etc/systemd/system/getty@tty1.service.d
+
+            cat > /etc/systemd/system/getty@tty1.service.d/autologin.conf << EOF
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin $AUTOLOGIN_USER --noclear %I \$TERM
+EOF
+
+            systemctl daemon-reload
+            systemctl enable getty@tty1.service
+
+            echo
+            echo "✓ Automatic login enabled for $AUTOLOGIN_USER"
+        fi
+
+    else
+        echo
+        echo "Invalid selection."
+        echo "Automatic login was not configured."
+    fi
+
+else
+    echo
+    echo "Automatic login disabled."
+fi
+
 
 # Finished
 echo
