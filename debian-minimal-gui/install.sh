@@ -1,52 +1,20 @@
 #!/bin/bash
-# -------------------------------------------------------------------------
 # Debian Minimal GUI Installer
-# -------------------------------------------------------------------------
 
 set -e
 
-# -------------------------------------------------------------------------
 # Root check
-# -------------------------------------------------------------------------
 if [ "$EUID" -ne 0 ]; then
     echo "Please run this script as root or with sudo!"
+    echo
+    echo "If sudo isn't installed:"
+    echo "login as root -> apt install -y sudo,"
+    echo "/sbin/reboot,"
+    echo "Log in as root -> usermod -aG sudo [username]"
     exit 1
 fi
 
-# -------------------------------------------------------------------------
-# Optional sudo installation
-# -------------------------------------------------------------------------
-echo "============================================="
-echo "             Sudo Configuration              "
-echo "============================================="
-echo
-
-if command -v sudo >/dev/null 2>&1; then
-    echo "sudo is already installed."
-    SUDO_AVAILABLE=true
-else
-    echo "sudo is NOT currently installed."
-    echo
-    read -r -p "Do you want to install sudo? (y/n): " INSTALL_SUDO
-
-    if [[ "$INSTALL_SUDO" =~ ^[Yy]$ ]]; then
-        echo
-        echo "Installing sudo..."
-
-        apt update
-        apt install -y sudo
-
-        SUDO_AVAILABLE=true
-        echo "sudo installed successfully."
-    else
-        SUDO_AVAILABLE=false
-        echo "sudo will NOT be installed."
-    fi
-fi
-
-# -------------------------------------------------------------------------
-# Determine the real/current user
-# -------------------------------------------------------------------------
+# Determine current user
 if [ -n "${SUDO_USER:-}" ] && id "$SUDO_USER" >/dev/null 2>&1; then
     CURRENT_REAL_USER="$SUDO_USER"
 else
@@ -56,9 +24,7 @@ fi
 echo
 echo "Current user: $CURRENT_REAL_USER"
 
-# -------------------------------------------------------------------------
-# User Scope Selection
-# -------------------------------------------------------------------------
+# User scope
 echo
 echo "============================================="
 echo "       User Configuration Scope              "
@@ -69,6 +35,7 @@ echo
 echo "  y) ALL users with a home directory in /home"
 echo "  n) ONLY the current user ($CURRENT_REAL_USER)"
 echo
+
 read -r -p "Apply to ALL users? (y/n): " USER_SCOPE
 
 TARGET_USERS=()
@@ -82,12 +49,10 @@ case "$USER_SCOPE" in
             if [[ "$homedir" == /home/* ]] \
                 && [ "$uid" -ge 1000 ] \
                 && id "$username" >/dev/null 2>&1; then
-
                 TARGET_USERS+=("$username")
             fi
         done < /etc/passwd
 
-        # Include root if script was executed directly as root
         if [ "$CURRENT_REAL_USER" = "root" ]; then
             TARGET_USERS+=("root")
         fi
@@ -106,7 +71,7 @@ case "$USER_SCOPE" in
         ;;
 esac
 
-# Remove duplicate users
+# Remove duplicates
 mapfile -t TARGET_USERS < <(
     printf '%s\n' "${TARGET_USERS[@]}" | sort -u
 )
@@ -125,9 +90,7 @@ if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
     exit 0
 fi
 
-# -------------------------------------------------------------------------
-# System Installation
-# -------------------------------------------------------------------------
+# System installation
 echo
 echo "=== 1. System Update & Minimal GUI Installation ==="
 
@@ -143,19 +106,15 @@ apt install -y --no-install-recommends \
     zram-tools \
     curl \
     ca-certificates \
-    policykit-1 \
     sudo
 
-# -------------------------------------------------------------------------
-# Configure Users
-# -------------------------------------------------------------------------
+# Configure users
 echo
 echo "=== 2. Configuring Users ==="
 
 for username in "${TARGET_USERS[@]}"; do
     echo "Configuring user: $username..."
 
-    # Determine home directory
     if [ "$username" = "root" ]; then
         U_HOME="/root"
     else
@@ -166,23 +125,14 @@ for username in "${TARGET_USERS[@]}"; do
             continue
         fi
 
-        # Allow shutdown/reboot through sudo/polkit groups where available
+        # Add user to sudo group
         usermod -aG sudo "$username" || true
-
-        # These groups may not exist on every Debian installation
-        getent group base >/dev/null && usermod -aG base "$username" || true
-        getent group power >/dev/null && usermod -aG power "$username" || true
     fi
 
-    # -------------------------------------------------------------
-    # .xinitrc
-    # -------------------------------------------------------------
+    # Start Openbox through startx
     echo "exec openbox-session" > "$U_HOME/.xinitrc"
 
-    # -------------------------------------------------------------
-    # .bashrc
-    # Automatically start X only on TTY1
-    # -------------------------------------------------------------
+    # Automatically start X on TTY1
     if [ -f "$U_HOME/.bashrc" ]; then
         if ! grep -q "Shell-to-GUI" "$U_HOME/.bashrc"; then
             cat << 'EOF' >> "$U_HOME/.bashrc"
@@ -203,9 +153,6 @@ fi
 EOF
     fi
 
-    # -------------------------------------------------------------
-    # Ownership
-    # -------------------------------------------------------------
     if [ "$username" != "root" ]; then
         chown "$username:$username" "$U_HOME/.xinitrc"
         chown "$username:$username" "$U_HOME/.bashrc"
@@ -214,13 +161,10 @@ EOF
     echo "  ✓ $username configured."
 done
 
-# -------------------------------------------------------------------------
-# SSD Optimizations
-# -------------------------------------------------------------------------
+# Reduce APT cache usage
 echo
-echo "=== 3. Radical SSD Optimizations (8GB Limit) ==="
+echo "=== 3. SSD / Storage Optimizations ==="
 
-# Disable APT package caching
 cat > /etc/apt/apt.conf.d/no-cache << 'EOF'
 DPkg::Post-Invoke {
     "rm -f /var/cache/apt/archives/*.deb /var/cache/apt/archives/partial/*.deb /var/cache/apt/*.bin || true";
@@ -230,9 +174,7 @@ EOF
 rm -f /var/cache/apt/archives/*.deb
 rm -f /var/cache/apt/archives/partial/*.deb
 
-# -------------------------------------------------------------------------
 # Limit systemd journal logs
-# -------------------------------------------------------------------------
 if [ -f /etc/systemd/journald.conf ]; then
     if grep -q '^SystemMaxUse=' /etc/systemd/journald.conf; then
         sed -i 's/^SystemMaxUse=.*/SystemMaxUse=50M/' /etc/systemd/journald.conf
@@ -243,9 +185,7 @@ if [ -f /etc/systemd/journald.conf ]; then
     systemctl restart systemd-journald || true
 fi
 
-# -------------------------------------------------------------------------
 # ZRAM
-# -------------------------------------------------------------------------
 echo
 echo "=== 4. Configuring ZRAM ==="
 
@@ -257,9 +197,7 @@ EOF
 systemctl enable zram-tools 2>/dev/null || true
 systemctl restart zram-tools || true
 
-# -------------------------------------------------------------------------
 # Finished
-# -------------------------------------------------------------------------
 echo
 echo "============================================="
 echo " INSTALLATION SUCCESSFULLY COMPLETED"
