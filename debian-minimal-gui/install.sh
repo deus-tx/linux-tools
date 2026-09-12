@@ -118,9 +118,155 @@ echo "============================================="
 printf '  - %s\n' "${TARGET_USERS[@]}"
 echo
 
-read -r -p "Continue with these settings? (y/n): " CONFIRM
+read -r -p "Continue with these users? (y/n): " CONFIRM
 
 if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
     echo "Installation cancelled."
     exit 0
 fi
+
+# -------------------------------------------------------------------------
+# System Installation
+# -------------------------------------------------------------------------
+echo
+echo "=== 1. System Update & Minimal GUI Installation ==="
+
+apt update
+
+apt install -y --no-install-recommends \
+    xorg \
+    openbox \
+    xterm \
+    vlc \
+    gparted \
+    synaptic \
+    zram-tools \
+    curl \
+    ca-certificates \
+    policykit-1 \
+    sudo
+
+# -------------------------------------------------------------------------
+# Configure Users
+# -------------------------------------------------------------------------
+echo
+echo "=== 2. Configuring Users ==="
+
+for username in "${TARGET_USERS[@]}"; do
+    echo "Configuring user: $username..."
+
+    # Determine home directory
+    if [ "$username" = "root" ]; then
+        U_HOME="/root"
+    else
+        U_HOME="$(getent passwd "$username" | cut -d: -f6)"
+
+        if [ -z "$U_HOME" ] || [ ! -d "$U_HOME" ]; then
+            echo "WARNING: Could not find home directory for $username. Skipping."
+            continue
+        fi
+
+        # Allow shutdown/reboot through sudo/polkit groups where available
+        usermod -aG sudo "$username" || true
+
+        # These groups may not exist on every Debian installation
+        getent group base >/dev/null && usermod -aG base "$username" || true
+        getent group power >/dev/null && usermod -aG power "$username" || true
+    fi
+
+    # -------------------------------------------------------------
+    # .xinitrc
+    # -------------------------------------------------------------
+    echo "exec openbox-session" > "$U_HOME/.xinitrc"
+
+    # -------------------------------------------------------------
+    # .bashrc
+    # Automatically start X only on TTY1
+    # -------------------------------------------------------------
+    if [ -f "$U_HOME/.bashrc" ]; then
+        if ! grep -q "Shell-to-GUI" "$U_HOME/.bashrc"; then
+            cat << 'EOF' >> "$U_HOME/.bashrc"
+
+# Automatically start X environment on TTY1 (Shell-to-GUI)
+if [ -z "$DISPLAY" ] && [ "${XDG_VTNR:-}" = "1" ]; then
+    exec startx
+fi
+EOF
+        fi
+    else
+        cat << 'EOF' > "$U_HOME/.bashrc"
+
+# Automatically start X environment on TTY1 (Shell-to-GUI)
+if [ -z "$DISPLAY" ] && [ "${XDG_VTNR:-}" = "1" ]; then
+    exec startx
+fi
+EOF
+    fi
+
+    # -------------------------------------------------------------
+    # Ownership
+    # -------------------------------------------------------------
+    if [ "$username" != "root" ]; then
+        chown "$username:$username" "$U_HOME/.xinitrc"
+        chown "$username:$username" "$U_HOME/.bashrc"
+    fi
+
+    echo "  ✓ $username configured."
+done
+
+# -------------------------------------------------------------------------
+# SSD Optimizations
+# -------------------------------------------------------------------------
+echo
+echo "=== 3. Radical SSD Optimizations (8GB Limit) ==="
+
+# Disable APT package caching
+cat > /etc/apt/apt.conf.d/no-cache << 'EOF'
+DPkg::Post-Invoke {
+    "rm -f /var/cache/apt/archives/*.deb /var/cache/apt/archives/partial/*.deb /var/cache/apt/*.bin || true";
+};
+EOF
+
+rm -f /var/cache/apt/archives/*.deb
+rm -f /var/cache/apt/archives/partial/*.deb
+
+# -------------------------------------------------------------------------
+# Limit systemd journal logs
+# -------------------------------------------------------------------------
+if [ -f /etc/systemd/journald.conf ]; then
+    if grep -q '^SystemMaxUse=' /etc/systemd/journald.conf; then
+        sed -i 's/^SystemMaxUse=.*/SystemMaxUse=50M/' /etc/systemd/journald.conf
+    else
+        sed -i '/^\[Journal\]/a SystemMaxUse=50M' /etc/systemd/journald.conf
+    fi
+
+    systemctl restart systemd-journald || true
+fi
+
+# -------------------------------------------------------------------------
+# ZRAM
+# -------------------------------------------------------------------------
+echo
+echo "=== 4. Configuring ZRAM ==="
+
+cat > /etc/default/zram-tools << 'EOF'
+ALGORITHM=lz4
+PERCENT=50
+EOF
+
+systemctl enable zram-tools 2>/dev/null || true
+systemctl restart zram-tools || true
+
+# -------------------------------------------------------------------------
+# Finished
+# -------------------------------------------------------------------------
+echo
+echo "============================================="
+echo " INSTALLATION SUCCESSFULLY COMPLETED"
+echo "============================================="
+echo
+echo "Configured users:"
+printf '  - %s\n' "${TARGET_USERS[@]}"
+echo
+echo "Reboot the system to complete."
+echo
