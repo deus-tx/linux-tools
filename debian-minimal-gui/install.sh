@@ -7,7 +7,7 @@ set -e
 if [ "$EUID" -ne 0 ]; then
     echo "Please run this script as root or with sudo!"
     echo
-    echo "If sudo isn't installed:"
+    echo -e "\033[31mIf sudo isn't installed:"
     echo "login as root -> apt install -y sudo,"
     echo "/sbin/reboot,"
     echo "Log in as root -> usermod -aG sudo [username]"
