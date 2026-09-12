@@ -10,7 +10,8 @@ if [ "$EUID" -ne 0 ]; then
     echo -e "\033[38;2;252;36;3mIf sudo isn't installed:\033[0m"
     echo "login as root -> apt install -y sudo,"
     echo "/sbin/reboot,"
-    echo "Log in as root -> usermod -aG sudo [username]"
+    echo "Log in as root -> /sbin/usermod -aG sudo [username]"
+    echo "/sbin/reboot"
     exit 1
 fi
 
